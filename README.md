@@ -1,4 +1,4 @@
-# Project ZeroWait
+# Project AsynchADC-UART
 
 A high-efficiency, non-blocking analog data acquisition system for STM32 microcontrollers utilizing hardware-triggered Injected ADC channels and asynchronous UART transmission.
 
