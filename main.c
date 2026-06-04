@@ -7,7 +7,7 @@
 uint16_t adc_ring_buffer[8];
 uint8_t tx_buffer[PACKET_SIZE];
 
-// Global trackers for background processing
+//global traxkers
 volatile uint8_t half_buffer_ready = 0;
 volatile uint8_t full_buffer_ready = 0;
 
@@ -25,14 +25,9 @@ int main(void)
   MX_GPIO_Init();
   suwi();
 
-  // Start the hardware engines
+  // start adc and timer
   ADC1->CR |= ADC_CR_ADSTART;
   TIM1->CR1 |= TIM_CR1_CEN;
-
-  // Alive check bytes
-  USART2_WriteChar('A');
-  USART2_WriteChar('B');
-  USART2_WriteChar('C');
 
   while (1)
   {
@@ -156,43 +151,43 @@ static void suwi(void)
     DMA1_Channel1->CNDTR = 8;
 
     DMA1_Channel1->CCR = 0;
-    DMA1_Channel1->CCR |= (1U << DMA_CCR_PSIZE_Pos); // 16-bit peripheral
-    DMA1_Channel1->CCR |= (1U << DMA_CCR_MSIZE_Pos); // 16-bit memory
+    DMA1_Channel1->CCR |= (1U << DMA_CCR_PSIZE_Pos); // 16 bit peripheral
+    DMA1_Channel1->CCR |= (1U << DMA_CCR_MSIZE_Pos); // 16 bit memory
     DMA1_Channel1->CCR |= DMA_CCR_MINC;             // Memory increment
 
-    // Enable circular mode along with Half-Transfer and Transfer-Complete Interrupts
+    // Enable circular mode, half flag and full flag
     DMA1_Channel1->CCR |= DMA_CCR_CIRC | DMA_CCR_TCIE | DMA_CCR_HTIE;
 
-    DMAMUX1_Channel0->CCR = 5; // Route ADC1 to DMA1 Channel 1
+    DMAMUX1_Channel0->CCR = 5; // Route ADC1 to DMA1 channel 1
 
-    // Configure DMA interrupts inside the core NVIC
+    // Config DMA interrupt with NVIC
     NVIC_SetPriority(DMA1_Channel1_IRQn, 1);
     NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 
-    // Bulletproof Timer Configuration using Master Mode Update (TRGO)
+    // Master mode (trigo)
     TIM1->PSC = 169;
     TIM1->ARR = 10000; // Trigger every 10ms
 
-    // Configure Master Mode Selection (MMS) to send TRGO pulse on Update Event
+    // Config master mode and send uodate through trigo
     TIM1->CR2 &= ~TIM_CR2_MMS;
-    TIM1->CR2 |= (2U << TIM_CR2_MMS_Pos); // 2 = TRGO on Update Event
+    TIM1->CR2 |= (2U << TIM_CR2_MMS_Pos); // 2 = TRGO on update event
     TIM1->EGR |= TIM_EGR_UG;              // Force a register update
 
-    // Run calibration before enabling the converter macro block
+    // Run calibration
     adc_calibrate();
 
-    // Enable the ADC and block until internal analog stability flag triggers
+    // Enable the ADC and block until internal analog stability flag trigger
     ADC1->CR |= ADC_CR_ADEN;
     while (!(ADC1->ISR & ADC_ISR_ADRDY)) { }
     ADC1->ISR |= ADC_ISR_ADRDY;
 
-    // Apply runtime tracking configurations (Triggers and Peripheral DMA mode)
+    // Apply runtime tracking configurations
     ADC1->CFGR &= ~(ADC_CFGR_EXTEN | ADC_CFGR_EXTSEL | ADC_CFGR_CONT);
 
-    // On STM32G4, EXTSEL = 9 selects TIM1_TRGO for regular channel group
+    // EXTSEL = 9 selects TIM1_TRGO for regular channel group
     ADC1->CFGR |= (9U << ADC_CFGR_EXTSEL_Pos);
     ADC1->CFGR |= (1U << ADC_CFGR_EXTEN_Pos);  // Detect on rising edge
-    ADC1->CFGR |= ADC_CFGR_DMAEN | ADC_CFGR_DMACFG; // Continuous Circular DMA mode
+    ADC1->CFGR |= ADC_CFGR_DMAEN | ADC_CFGR_DMACFG; // Continuous circular DMA mode
 
     ADC1->SQR1 = 0;
     ADC1->SQR1 |= (1U << ADC_SQR1_SQ1_Pos); // Map sequence to Channel 1
@@ -203,14 +198,14 @@ static void suwi(void)
 
 void DMA1_Channel1_IRQHandler(void)
 {
-    // Half Transfer Interrupt Handling (Elements 0 through 3 Ready)
+    // Half Transfer Interrupt Handling
     if (DMA1->ISR & DMA_ISR_HTIF1)
     {
         DMA1->IFCR = DMA_IFCR_CHTIF1;
         half_buffer_ready = 1;
     }
 
-    // Transfer Complete Interrupt Handling (Elements 4 through 7 Ready)
+    // Transfer Complete Interrupt Handling
     if (DMA1->ISR & DMA_ISR_TCIF1)
     {
         DMA1->IFCR = DMA_IFCR_CTCIF1;
