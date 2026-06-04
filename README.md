@@ -1,61 +1,69 @@
-# Project AsynchADC-UART
+# STM32 High-Speed ADC Data Acquisition & Streaming Pipeline
 
-A high-efficiency, non-blocking analog data acquisition system for STM32 microcontrollers utilizing hardware-triggered Injected ADC channels and asynchronous UART transmission.
+An optimized, low-overhead data acquisition application for STM32 microcontrollers (STM32G4 series). This project demonstrates how to bypass heavy HAL functions to build a deterministic hardware pipeline using **Timers, ADC, and DMA**, streaming framed data packets over **UART** with minimal CPU intervention.
 
-## Overview
+---
 
-In traditional embedded applications, sampling analog signals frequently locks the CPU in polling loops (`while` checks on flags) or stalls the system with software delays. Project ZeroWait eliminates this inefficiency. 
+## 🚀 System Architecture
 
-By configuring Timer 1 (TIM1) to generate a Master Trigger Output (TRGO) on compare match, ADC1 is driven entirely by hardware. The application utilizes the ADC's **Injected Channel Group** to automatically sample and store four consecutive data points into dedicated internal hardware registers without requiring DMA or CPU intervention. 
+The project configures the MCU to run at its boosted maximum performance frequency (**170 MHz** via the PLL).
 
-When the conversion sequence finishes, an Injected End of Sequence (JEOS) interrupt wakes the processor just long enough to copy the data and schedule a structured packet transmission over USART2.
+### Key Peripherals & Configurations
+* **System Clock:** 170 MHz system clock derived from the internal HSI oscillator, boosted via Voltage Scale 1 Boost mode.
+* **TIM1 (Timer 1):** Configured with a prescaler of 169 to drop the clock down to 1 MHz. It handles precise timing intervals to trigger the ADC.
+* **ADC1 (Analog-to-Digital Converter):** Operating in hardware-triggered mode (tied to TIM1). It captures analog signals without polling delays.
+* **DMA1 & DMAMUX1:** Transfers raw 16-bit ADC samples directly into a circular ring buffer (`adc_ring_buffer`) in SRAM.
+* **USART2 (UART):** Configured at a register level for raw, high-speed character transmission.
 
-## Features
+---
 
-* **Zero CPU Polling**: No `while(!(ADC->ISR & ...))` blocking loops during the sampling window.
-* **Hardware-Timed Pacing**: Sampling intervals are governed precisely by the TIM1 time base, removing artificial software delay loops.
-* **Injected Sequence Routing**: Leverages the high-priority injected channel queue (`JSQR`) to capture 4 samples sequentially into dedicated hardware registers (`JDR1` through `JDR4`).
-* **Asynchronous Execution Architecture**: The main program loop remains entirely non-blocking, making it trivial to integrate this driver into real-time operating systems (RTOS) or complex state machines.
-* **Structured Data Packetization**: Implements a lightweight data link protocol equipped with a sync character alignment byte and an XOR checksum for transmission integrity validation.
+## 📦 Packet Protocol Format
 
-## Hardware Configuration
+Data is transmitted in structured **10-byte packets** to ensure data integrity and ease of parsing on the receiving end (e.g., a Python script or serial plotter). 
 
-### Clock Tree
-* System Clock: 170 MHz via High-Speed Internal (HSI) oscillator and Phase-Locked Loop (PLL) configuration.
-* ADC Clock Source: Synchronous AHB clock divided by 4.
-
-### Peripherals
-* **TIM1**: Configured with a Prescaler of 169 and an Auto-Reload Register (ARR) value of 10000 to establish the time-base trigger. Master Mode Selection (MMS) is set to Output Compare 1 Reference (`OC1REF`) to drive the TRGO line.
-* **ADC1**: Configured for Injected Conversion. Sequence length is set to 4 channels (`JL = 3`), triggered on the rising edge of `TIM1_TRGO`. Channel 1 is mapped to all 4 sequence slots.
-* **USART2**: Initialized for transmitter-only operation to stream the packed data bytes to a host system.
-
-## Data Packet Protocol
-
-Data is transmitted through USART2 in fixed-size frames consisting of 10 bytes:
+Each transmission cycle takes the 8 collected samples, splits them into two blocks of 4 samples, and packages them as follows:
 
 | Byte Index | Field | Description |
-|---|---|---|
-| 0 | Packet Sync | ASCII character '#' (0x23) |
-| 1 - 2 | Sample 0 | Injected Channel Data 1 (Low Byte, High Byte) |
-| 3 - 4 | Sample 1 | Injected Channel Data 2 (Low Byte, High Byte) |
-| 5 - 6 | Sample 2 | Injected Channel Data 3 (Low Byte, High Byte) |
-| 7 - 8 | Sample 3 | Injected Channel Data 4 (Low Byte, High Byte) |
-| 9 | Checksum | Byte-wise XOR combination of bytes 1 through 8 |
+| :--- | :--- | :--- |
+| `0` | **Sync Byte** | Always `#` (`0x23`) to mark the frame start |
+| `1 - 2` | **Sample 1** | 16-bit ADC value (Low Byte, High Byte) |
+| `3 - 4` | **Sample 2** | 16-bit ADC value (Low Byte, High Byte) |
+| `5 - 6` | **Sample 3** | 16-bit ADC value (Low Byte, High Byte) |
+| `7 - 8` | **Sample 4** | 16-bit ADC value (Low Byte, High Byte) |
+| `9` | **Checksum** | 8-bit XOR of all payload bytes (Bytes 1-8) |
 
-## Project Structure
+---
 
-* `main.c`: Contains peripheral initialization (`suwi`), the asynchronous background execution loop, the ADC interrupt handler (`ADC1_2_IRQHandler`), and the serialization packet engine.
-* `main.h`: Core configuration constants, macros, and function prototypes.
+## 🛠️ Deep Dive: Code Implementation
 
-## Getting Started
+### The `suwi()` Initialization
+Instead of relying on bloated abstract drivers, the `suwi()` function handles bare-metal register manipulation to link peripherals together:
+* Enables clocks for `DMA1`, `ADC12`, `GPIOA`, `USART2`, and `TIM1`.
+* Routes `ADC1` to the DMA pipeline using `DMAMUX1`.
+* Calibrates and enables the ADC internal voltage regulator for stable, precise readings.
+
+### The Main Loop Pipeline
+1.  **DMA Reset:** Clears transfer flags and arms DMA Channel 1 for exactly 8 transfers.
+2.  **Hardware Start:** Starts `ADC1` and enables `TIM1`.
+3.  **Zero-CPU Wait:** The MCU blocks on a hardware flag `while (!(DMA1->ISR & DMA_ISR_TCIF1))` waiting for the DMA to finish filling the buffer.
+4.  **Packetization:** Breaks the 8-sample ring buffer into two distinct 4-sample payloads, calculates the XOR checksum, and pushes them out via `USART2`.
+5.  **Pacing Delay:** Features a lightweight spin-loop delay before restarting the acquisition cycle.
+
+---
+
+## 💻 Getting Started
 
 ### Prerequisites
-* Toolchain: GNU Arm Embedded Toolchain (GCC) or STM32CubeIDE.
-* Hardware: Compatible STM32 microcontroller supporting basic register map layout for advanced timers and injected ADC functionality.
+* **Toolchain:** STM32CubeIDE or `arm-none-eabi-gcc` with `make`.
+* **Hardware:** An STM32G4 series development board (e.g., NUCLEO-G474RE or similar) with `PA2` configured for UART TX and the target analog source connected to `PA0` (ADC1_IN1).
 
-### Compilation and Flashing
-1. Import the source files into your preferred STM32 development environment.
-2. Ensure that your startup file routes the `ADC1_2_IRQHandler` vector properly to the handler defined in `main.c`.
-3. Compile the project using the appropriate optimization flags (`-O2` or `-Os` recommended).
-4. Flash the binary to your target microcontroller using an ST-LINK or equivalent programmer.
-5. Connect a logic analyzer or a serial terminal program (configured to match the hardware baud rate settings) to the USART2 TX pin to observe the continuous data frame streaming.
+### Build & Flash
+1. Clone this repository to your local machine.
+2. Open the project inside **STM32CubeIDE**.
+3. Hit `Build` (Hammer Icon) to compile the binary.
+4. Connect your Nucleo board and hit `Run` / `Debug` to flash the firmware.
+
+---
+
+## 🔍 Verifying Output
+Connect a USB-to-UART converter to the target MCU's `USART2` pins (typically routed automatically to the ST-Link Virtual COM port on Nucleo boards) and open a serial terminal at your designated baud rate. You should see a steady stream of binary packets starting with `#`.
