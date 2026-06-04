@@ -4,7 +4,7 @@ An optimized, low-overhead data acquisition application for STM32 microcontrolle
 
 ---
 
-## 🚀 System Architecture
+## System Architecture
 
 The project configures the MCU to run at its boosted maximum performance frequency (**170 MHz** via the PLL).
 
@@ -17,7 +17,7 @@ The project configures the MCU to run at its boosted maximum performance frequen
 
 ---
 
-## 📦 Packet Protocol Format
+## Packet Protocol Format
 
 Data is transmitted in structured **10-byte packets** to ensure data integrity and ease of parsing on the receiving end (e.g., a Python script or serial plotter). 
 
@@ -34,7 +34,7 @@ Each transmission cycle takes the 8 collected samples, splits them into two bloc
 
 ---
 
-## 🛠️ Deep Dive: Code Implementation
+## Deep Dive: Code Implementation
 
 ### The `suwi()` Initialization
 Instead of relying on bloated abstract drivers, the `suwi()` function handles bare-metal register manipulation to link peripherals together:
@@ -51,7 +51,7 @@ Instead of relying on bloated abstract drivers, the `suwi()` function handles ba
 
 ---
 
-## 💻 Getting Started
+## Getting Started
 
 ### Prerequisites
 * **Toolchain:** STM32CubeIDE or `arm-none-eabi-gcc` with `make`.
@@ -65,5 +65,5 @@ Instead of relying on bloated abstract drivers, the `suwi()` function handles ba
 
 ---
 
-## 🔍 Verifying Output
+## Verifying Output
 Connect a USB-to-UART converter to the target MCU's `USART2` pins (typically routed automatically to the ST-Link Virtual COM port on Nucleo boards) and open a serial terminal at your designated baud rate. You should see a steady stream of binary packets starting with `#`.
