@@ -7,6 +7,10 @@
 uint16_t adc_ring_buffer[8];
 uint8_t tx_buffer[PACKET_SIZE];
 
+// Global trackers for background processing
+volatile uint8_t half_buffer_ready = 0;
+volatile uint8_t full_buffer_ready = 0;
+
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void USART2_WriteChar(char c);
@@ -21,31 +25,29 @@ int main(void)
   MX_GPIO_Init();
   suwi();
 
+  // Start the hardware engines
+  ADC1->CR |= ADC_CR_ADSTART;
+  TIM1->CR1 |= TIM_CR1_CEN;
+
+  // Alive check bytes
+  USART2_WriteChar('A');
+  USART2_WriteChar('B');
+  USART2_WriteChar('C');
+
   while (1)
-    {
-        DMA1_Channel1->CCR &= ~DMA_CCR_EN;
-        DMA1_Channel1->CNDTR = 8;
-        DMA1_Channel1->CCR |= DMA_CCR_EN;
+  {
+      if (half_buffer_ready)
+      {
+          half_buffer_ready = 0;
+          Send_Packet_From_Buffer(&adc_ring_buffer[0]); // First 4 elements
+      }
 
-        // clear dma flag
-        DMA1->IFCR = DMA_IFCR_CTCIF1 | DMA_IFCR_CHTIF1;
-
-        // counter to 0
-        TIM1->CNT = 0;
-
-        ADC1->CR |= ADC_CR_ADSTART;
-        TIM1->CR1 |= TIM_CR1_CEN;
-
-        // dma full flag wait
-        while (!(DMA1->ISR & DMA_ISR_TCIF1)) {}
-
-        TIM1->CR1 &= ~TIM_CR1_CEN;
-
-        Send_Packet_From_Buffer(&adc_ring_buffer[0]); // first 4
-        Send_Packet_From_Buffer(&adc_ring_buffer[4]); // last 4
-
-        for (volatile int i = 0; i < 500000; i++) { }
-    }
+      if (full_buffer_ready)
+      {
+          full_buffer_ready = 0;
+          Send_Packet_From_Buffer(&adc_ring_buffer[4]); // Last 4 elements
+      }
+  }
 }
 
 void SystemClock_Config(void)
@@ -121,16 +123,16 @@ static void adc_calibrate(void)
 
 static void suwi(void)
 {
-	RCC->PLLCFGR |= (8U << RCC_PLLCFGR_PLLPDIV_Pos) | (RCC_PLLCFGR_PLLPEN);
+    RCC->PLLCFGR |= (8U << RCC_PLLCFGR_PLLPDIV_Pos) | (RCC_PLLCFGR_PLLPEN);
 
-    RCC->AHB1ENR  |= RCC_AHB1ENR_DMA1EN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
     RCC->AHB2ENR  |= RCC_AHB2ENR_ADC12EN;
     RCC->AHB2ENR  |= RCC_AHB2ENR_GPIOAEN;
     RCC->APB1ENR1 |= RCC_APB1ENR1_USART2EN;
     RCC->APB2ENR  |= RCC_APB2ENR_TIM1EN;
 
     RCC->CCIPR &= ~(RCC_CCIPR_ADC12SEL);
-    RCC->CCIPR |=  (3U << RCC_CCIPR_ADC12SEL_Pos);
+    RCC->CCIPR |=  (1U << RCC_CCIPR_ADC12SEL_Pos);
 
     GPIOA->MODER  &= ~(3UL << (2 * 2));
     GPIOA->MODER  |=  (2UL << (2 * 2));
@@ -141,44 +143,79 @@ static void suwi(void)
     USART2->CR1 |= USART_CR1_TE;
     USART2->CR1 |= USART_CR1_UE;
 
+    // Clear and set PA0 to Analog Mode
+    GPIOA->MODER &= ~(3UL << (2 * 0));
     GPIOA->MODER |=  (3UL << (2 * 0));
+
+    // Clear DMA flag status bits
+    DMA1->IFCR = DMA_IFCR_CTCIF1 | DMA_IFCR_CHTIF1;
 
     DMA1_Channel1->CCR &= ~DMA_CCR_EN;
     DMA1_Channel1->CPAR  = (uint32_t)(&(ADC1->DR));
     DMA1_Channel1->CMAR  = (uint32_t)(adc_ring_buffer);
+    DMA1_Channel1->CNDTR = 8;
 
     DMA1_Channel1->CCR = 0;
-    DMA1_Channel1->CCR |= (1U << DMA_CCR_PSIZE_Pos);
-    DMA1_Channel1->CCR |= (1U << DMA_CCR_MSIZE_Pos);
-    DMA1_Channel1->CCR |= DMA_CCR_MINC;
+    DMA1_Channel1->CCR |= (1U << DMA_CCR_PSIZE_Pos); // 16-bit peripheral
+    DMA1_Channel1->CCR |= (1U << DMA_CCR_MSIZE_Pos); // 16-bit memory
+    DMA1_Channel1->CCR |= DMA_CCR_MINC;             // Memory increment
 
-    DMAMUX1_Channel0->CCR = 5;
+    // Enable circular mode along with Half-Transfer and Transfer-Complete Interrupts
+    DMA1_Channel1->CCR |= DMA_CCR_CIRC | DMA_CCR_TCIE | DMA_CCR_HTIE;
 
-    // clk 170 , pr 169 to 1 MHz
+    DMAMUX1_Channel0->CCR = 5; // Route ADC1 to DMA1 Channel 1
+
+    // Configure DMA interrupts inside the core NVIC
+    NVIC_SetPriority(DMA1_Channel1_IRQn, 1);
+    NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
+    // Bulletproof Timer Configuration using Master Mode Update (TRGO)
     TIM1->PSC = 169;
-    TIM1->ARR = 10000;
-    TIM1->CCR1 = 9990;   // cmp value for duty cycle
+    TIM1->ARR = 10000; // Trigger every 10ms
 
-    TIM1->CCMR1 &= ~TIM_CCMR1_OC1M;
-    TIM1->CCMR1 |= (6U << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
-    TIM1->CCER  |= TIM_CCER_CC1E;
-    TIM1->BDTR  |= TIM_BDTR_MOE;   // main op enable
-    TIM1->EGR   |= TIM_EGR_UG;     // reg update
+    // Configure Master Mode Selection (MMS) to send TRGO pulse on Update Event
+    TIM1->CR2 &= ~TIM_CR2_MMS;
+    TIM1->CR2 |= (2U << TIM_CR2_MMS_Pos); // 2 = TRGO on Update Event
+    TIM1->EGR |= TIM_EGR_UG;              // Force a register update
 
+    // Run calibration before enabling the converter macro block
     adc_calibrate();
 
-    ADC1->CFGR &= ~(ADC_CFGR_EXTEN | ADC_CFGR_EXTSEL | ADC_CFGR_CONT);
-
-    ADC1->CFGR |= (0U << ADC_CFGR_EXTSEL_Pos);
-    ADC1->CFGR |= (1U << ADC_CFGR_EXTEN_Pos);  // tirgger for rising edge
-    ADC1->CFGR |= ADC_CFGR_DMAEN;             // dma link
-
-    ADC1->SQR1 = 0;
-    ADC1->SQR1 |= (1U << ADC_SQR1_SQ1_Pos);
-
+    // Enable the ADC and block until internal analog stability flag triggers
     ADC1->CR |= ADC_CR_ADEN;
     while (!(ADC1->ISR & ADC_ISR_ADRDY)) { }
     ADC1->ISR |= ADC_ISR_ADRDY;
+
+    // Apply runtime tracking configurations (Triggers and Peripheral DMA mode)
+    ADC1->CFGR &= ~(ADC_CFGR_EXTEN | ADC_CFGR_EXTSEL | ADC_CFGR_CONT);
+
+    // On STM32G4, EXTSEL = 9 selects TIM1_TRGO for regular channel group
+    ADC1->CFGR |= (9U << ADC_CFGR_EXTSEL_Pos);
+    ADC1->CFGR |= (1U << ADC_CFGR_EXTEN_Pos);  // Detect on rising edge
+    ADC1->CFGR |= ADC_CFGR_DMAEN | ADC_CFGR_DMACFG; // Continuous Circular DMA mode
+
+    ADC1->SQR1 = 0;
+    ADC1->SQR1 |= (1U << ADC_SQR1_SQ1_Pos); // Map sequence to Channel 1
+
+    // Activate the DMA channel stream layer
+    DMA1_Channel1->CCR |= DMA_CCR_EN;
+}
+
+void DMA1_Channel1_IRQHandler(void)
+{
+    // Half Transfer Interrupt Handling (Elements 0 through 3 Ready)
+    if (DMA1->ISR & DMA_ISR_HTIF1)
+    {
+        DMA1->IFCR = DMA_IFCR_CHTIF1;
+        half_buffer_ready = 1;
+    }
+
+    // Transfer Complete Interrupt Handling (Elements 4 through 7 Ready)
+    if (DMA1->ISR & DMA_ISR_TCIF1)
+    {
+        DMA1->IFCR = DMA_IFCR_CTCIF1;
+        full_buffer_ready = 1;
+    }
 }
 
 static void Send_Packet_From_Buffer(uint16_t *src_buffer)
