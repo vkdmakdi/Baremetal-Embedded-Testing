@@ -19,7 +19,6 @@
 - [Getting Started](#getting-started)
 - [Python Decoder](#python-decoder)
 - [File Structure](#file-structure)
-- [Known Gotchas](#known-gotchas)
 - [License](#license)
 
 ---
@@ -254,45 +253,6 @@ stm32-adc-dma-uart-logger/
 
 ---
 
-## Known Gotchas
-
-These are real bugs discovered during development — not obvious from the datasheet.
-
-### 1. Wrong ADC clock source stalls everything silently
-
-```c
-// WRONG — 0b11 is reserved on STM32G4, ADC receives no kernel clock
-RCC->CCIPR |= (3U << RCC_CCIPR_ADC12SEL_Pos);
-
-// CORRECT — 0b01 selects PLLP as the ADC kernel clock
-RCC->CCIPR |= (1U << RCC_CCIPR_ADC12SEL_Pos);
-```
-
-**Symptom:** Firmware boots, `ABC` prints over UART, but the main loop hangs forever. No DMA interrupts ever fire because the ADC never completes a conversion. The `ADCAL` and `ADEN` startup sequence uses a separate internal path and succeeds even without the kernel clock — which makes this extremely hard to diagnose.
-
-### 2. DMAMUX clock enable is separate from DMA clock enable
-
-```c
-// WRONG — DMAMUX peripheral has no clock, request routing is silently broken
-RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
-
-// CORRECT
-RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN | RCC_AHB1ENR_DMAMUX1EN;
-```
-
-**Symptom:** Same as above — DMA never triggers even after fixing the ADC clock. On STM32G4, DMAMUX1 is a separate peripheral with its own clock gate. Writing to `DMAMUX1_Channel0->CCR` without the clock enabled does nothing.
-
-### 3. EXTSEL value is not portable across STM32 families
-
-```c
-// On STM32G4 specifically, EXTSEL = 9 → TIM1_TRGO (regular channel group)
-// This mapping differs on F4, L4, and other families — always check your RM
-ADC1->CFGR |= (9U << ADC_CFGR_EXTSEL_Pos);
-```
-
-Always verify against **RM0440 Table 163** for STM32G4. Copying EXTSEL values from other projects targeting different STM32 families will silently select the wrong trigger source.
-
----
 
 ## License
 
