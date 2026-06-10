@@ -130,7 +130,7 @@ HSI (16 MHz)
                        └── ADC12SEL = 1 (PLLP) in RCC->CCIPR
 ```
 
-> **Important:** On STM32G4, `ADC12SEL` must be set to `1` (PLLP). Value `3` is reserved and leaves the ADC with no clock — see [Known Gotchas](#known-gotchas).
+> **Important:** On STM32G4, `ADC12SEL` must be set to `1` (PLLP). Value `3` is reserved and leaves the ADC with no clock.
 
 ---
 
